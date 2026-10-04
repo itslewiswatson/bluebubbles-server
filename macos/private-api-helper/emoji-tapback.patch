@@ -1,0 +1,90 @@
+diff --git a/Messages/MacOS-11+/BlueBubblesHelper/BlueBubblesHelper.m b/Messages/MacOS-11+/BlueBubblesHelper/BlueBubblesHelper.m
+index 2e3ddd7..e41ff0b 100644
+--- a/Messages/MacOS-11+/BlueBubblesHelper/BlueBubblesHelper.m
++++ b/Messages/MacOS-11+/BlueBubblesHelper/BlueBubblesHelper.m
+@@ -61,6 +61,18 @@ @interface IMChat (TahoeEdit)
+ - (void)editMessageItem:(id)arg1 atPartIndex:(long)arg2 withNewPartText:(id)arg3 newPartTranslation:(id)arg4 backwardCompatabilityText:(id)arg5;
+ @end
+ 
++// Emoji tapback APIs (macOS 15+). Declared as protocols so no class symbols are
++// linked, since these classes don't exist on older macOS versions.
++@protocol BBEmojiTapback <NSObject>
++- (id)initWithEmoji:(NSString *)emoji isRemoved:(BOOL)isRemoved;
++- (IMMessage *)messageForChat:(IMChat *)chat messageGUID:(NSString *)messageGuid messagePartRange:(NSRange)range messageSummaryInfo:(NSDictionary *)summaryInfo threadIdentifier:(NSString *)threadIdentifier;
++@end
++
++@protocol BBTapbackSender <NSObject>
++- (id)initWithTapback:(id)tapback chat:(IMChat *)chat messagePartChatItem:(IMMessagePartChatItem *)chatItem;
++- (id)send;
++@end
++
+ // This can be used to dump the methods of any class
+ @interface NSObject (Private)
+ - (NSString*)_methodDescription;
+@@ -971,6 +983,55 @@ +(NSString *) reactionToVerb:(NSString *)reactionType {
+     return @"";
+ }
+ 
++// Send an emoji tapback (macOS 15+). reactionType is "emoji" or "-emoji", and reactionEmoji is any emoji
+++(void) sendEmojiTapback:(NSDictionary *)data chat:(IMChat *)chat message:(IMMessage *)message item:(IMMessagePartChatItem *)item transaction:(NSString *)transaction {
++    void (^sendError)(NSString *) = ^(NSString *error) {
++        DLog("BLUEBUBBLESHELPER: %{public}@", error);
++        if (transaction != nil) {
++            [[NetworkController sharedInstance] sendMessage: @{@"transactionId": transaction, @"error": error}];
++        }
++    };
++
++    NSString *emoji = data[@"reactionEmoji"];
++    if (![emoji isKindOfClass:[NSString class]] || [emoji length] == 0) {
++        sendError(@"No reactionEmoji provided for emoji tapback!");
++        return;
++    }
++
++    Class tapbackClass = NSClassFromString(@"IMEmojiTapback");
++    if (tapbackClass == nil) {
++        sendError(@"Emoji tapbacks require macOS 15 or newer!");
++        return;
++    }
++
++    BOOL isRemoved = [data[@"reactionType"] hasPrefix:@"-"];
++    id<BBEmojiTapback> tapback = [[tapbackClass alloc] initWithEmoji:emoji isRemoved:isRemoved];
++
++    // Prefer IMTapbackSender, which is what Messages.app uses to send tapbacks
++    Class senderClass = NSClassFromString(@"IMTapbackSender");
++    if (item != nil && senderClass != nil) {
++        id<BBTapbackSender> sender = [[senderClass alloc] initWithTapback:tapback chat:chat messagePartChatItem:item];
++        [sender send];
++    } else if ([tapback respondsToSelector:@selector(messageForChat:messageGUID:messagePartRange:messageSummaryInfo:threadIdentifier:)]) {
++        // Build the tapback message ourselves, mirroring how classic tapbacks are associated
++        NSAttributedString *text = (item != nil && [item text] != nil) ? [item text] : [message text];
++        NSString *associatedGuid = (item != nil && [item text] != nil)
++            ? [NSString stringWithFormat:@"p:%@/%@", data[@"partIndex"], [message guid]]
++            : [NSString stringWithFormat:@"bp:%@", [message guid]];
++        NSRange range = (item != nil) ? [item messagePartRange] : NSMakeRange(0, text.string.length);
++        NSDictionary *messageSummary = text.string != nil ? @{@"amc":@1,@"ams":text.string} : @{};
++        IMMessage *tapbackMessage = [tapback messageForChat:chat messageGUID:associatedGuid messagePartRange:range messageSummaryInfo:messageSummary threadIdentifier:nil];
++        [chat sendMessage:tapbackMessage];
++    } else {
++        sendError(@"Emoji tapbacks are not supported on this macOS version!");
++        return;
++    }
++
++    if (transaction != nil) {
++        [[NetworkController sharedInstance] sendMessage: @{@"transactionId": transaction, @"identifier": [[chat lastSentMessage] guid]}];
++    }
++}
++
+ +(void) getMessageItem:(IMChat *)chat :(NSString *)actionMessageGuid completionBlock:(void (^)(IMMessage *message))block {
+     [[IMChatHistoryController sharedInstance] loadMessageWithGUID:(actionMessageGuid) completionBlock:^(IMMessage *message) {
+         DLog("BLUEBUBBLESHELPER: Got message for guid %{public}@", actionMessageGuid);
+@@ -1183,7 +1244,9 @@ +(void) sendMessage: (NSDictionary *) data transfers: (NSArray *) transfers attr
+             } else {
+                 item = (IMMessagePartChatItem *)items;
+             }
+-            if (data[@"reactionType"] != [NSNull null] && [data[@"reactionType"] length] != 0) {
++            if (data[@"reactionType"] != [NSNull null] && [[data[@"reactionType"] lowercaseString] hasSuffix:@"emoji"]) {
++                [BlueBubblesHelper sendEmojiTapback:data chat:chat message:message item:item transaction:transaction];
++            } else if (data[@"reactionType"] != [NSNull null] && [data[@"reactionType"] length] != 0) {
+                 NSString *reaction = data[@"reactionType"];
+                 long long reactionLong = [BlueBubblesHelper parseReactionType:(reaction)];
+                 NSDictionary *messageSummary;

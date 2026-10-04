@@ -4,11 +4,12 @@ import { FileSystem } from "@server/fileSystem";
 import { MessagePromise } from "@server/managers/outgoingMessageManager/messagePromise";
 import { Message } from "@server/databases/imessage/entity/Message";
 import { checkPrivateApiStatus, isEmpty, isNotEmpty, resultAwaiter } from "@server/helpers/utils";
-import { isMinMonterey, isMinVentura } from "@server/env";
+import { isMinMonterey, isMinSequoia, isMinVentura } from "@server/env";
 import { negativeReactionTextMap, reactionTextMap } from "@server/api/apple/mappings";
 import { invisibleMediaChar } from "@server/api/http/constants";
 import { ActionHandler } from "@server/api/apple/actions";
 import { rimrafSync } from "rimraf";
+import type { ValidRemoveTapback, ValidTapback } from "@server/types";
 import type {
     SendMessageParams,
     SendAttachmentParams,
@@ -38,6 +39,23 @@ export class MessageInterface {
         "-emphasize",
         "-question"
     ];
+
+    // Matches a single emoji (including skin tones, ZWJ sequences, keycaps, and flags)
+    static emojiReactionRegex =
+        /^(?:\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3|\p{Extended_Pictographic}(?:[\uFE0E\uFE0F]|\p{Emoji_Modifier}|[\u{E0020}-\u{E007F}])*(?:\u200D\p{Extended_Pictographic}(?:[\uFE0E\uFE0F]|\p{Emoji_Modifier})*)*)$/u;
+
+    /**
+     * Gets the emoji from an emoji tapback (e.g. "👀" or "-👀" to remove it).
+     * Returns null if the reaction is not an emoji tapback.
+     */
+    static getReactionEmoji(reaction: string): string | null {
+        const emoji = reaction?.startsWith("-") ? reaction.substring(1) : reaction;
+        return MessageInterface.emojiReactionRegex.test(emoji ?? "") ? emoji : null;
+    }
+
+    static isValidReaction(reaction: string): boolean {
+        return MessageInterface.possibleReactions.includes(reaction) || !!MessageInterface.getReactionEmoji(reaction);
+    }
 
     /**
      * Sends a message by executing the sendMessage AppleScript
@@ -394,11 +412,20 @@ export class MessageInterface {
     }: SendReactionParams): Promise<Message> {
         checkPrivateApiStatus();
 
+        const emoji = MessageInterface.getReactionEmoji(reaction);
+        if (emoji && !isMinSequoia) {
+            throw new Error("Emoji tapbacks are only supported on macOS Sequoia and newer!");
+        }
+
         // Rebuild the selected message text to make it what the reaction text
         // would be in the database
-        const prefix = (reaction as string).startsWith("-")
-            ? negativeReactionTextMap[reaction as string]
-            : reactionTextMap[reaction as string];
+        const isRemoval = reaction.startsWith("-");
+        let prefix: string;
+        if (emoji) {
+            prefix = isRemoval ? `Removed ${emoji} from` : `Reacted ${emoji} to`;
+        } else {
+            prefix = isRemoval ? negativeReactionTextMap[reaction] : reactionTextMap[reaction];
+        }
 
         // If the message text is just the invisible char, we know it's probably just an attachment
         const text = message.universalText(false) ?? "";
@@ -454,7 +481,14 @@ export class MessageInterface {
         Server().messageManager.add(awaiter);
 
         // Send the reaction
-        const result = await Server().privateApi.message.react(chatGuid, message.guid, reaction, partIndex ?? 0);
+        const reactionType = emoji ? (isRemoval ? "-emoji" : "emoji") : (reaction as ValidTapback | ValidRemoveTapback);
+        const result = await Server().privateApi.message.react(
+            chatGuid,
+            message.guid,
+            reactionType,
+            partIndex ?? 0,
+            emoji
+        );
         if (!result?.identifier) {
             throw new Error("Failed to send reaction! No message GUID returned.");
         } else {

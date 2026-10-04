@@ -873,23 +873,7 @@ export class SocketRoutes {
                 return response(cb, "error", createBadRequestResponse("No message provided!"));
             if (!params?.actionMessageGuid || !params?.actionMessageText)
                 return response(cb, "error", createBadRequestResponse("No action message provided!"));
-            if (
-                !params?.tapback ||
-                ![
-                    "love",
-                    "like",
-                    "dislike",
-                    "laugh",
-                    "emphasize",
-                    "question",
-                    "-love",
-                    "-like",
-                    "-dislike",
-                    "-laugh",
-                    "-emphasize",
-                    "-question"
-                ].includes(params.tapback)
-            )
+            if (!params?.tapback || !MessageInterface.isValidReaction(params.tapback))
                 return response(cb, "error", createBadRequestResponse("Invalid tapback descriptor provided!"));
 
             // Fetch the message we are reacting to

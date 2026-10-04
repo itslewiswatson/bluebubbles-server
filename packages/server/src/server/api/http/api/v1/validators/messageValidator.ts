@@ -167,12 +167,16 @@ export class MessageValidator {
     static sendReactionRules = {
         chatGuid: "required|string",
         selectedMessageGuid: "required|string",
-        reaction: `required|string|in:${MessageInterface.possibleReactions.join(",")}`,
+        reaction: "required|string",
         partIndex: "numeric|min:0"
     };
 
     static async validateReaction(ctx: RouterContext, next: Next) {
         ValidateInput(ctx.request?.body, MessageValidator.sendReactionRules);
+        if (!MessageInterface.isValidReaction(ctx.request.body.reaction)) {
+            throw new BadRequest({ error: "The selected reaction is invalid." });
+        }
+
         await next();
     }
 

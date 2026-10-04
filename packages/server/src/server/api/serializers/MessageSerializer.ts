@@ -1,6 +1,6 @@
 import { Server } from "@server";
 import { isEmpty, isNotEmpty } from "@server/helpers/utils";
-import { isMinHighSierra, isMinMonterey, isMinVentura } from "@server/env";
+import { isMinHighSierra, isMinMonterey, isMinSequoia, isMinVentura } from "@server/env";
 import { HandleResponse, MessageResponse } from "@server/types";
 import { AttachmentSerializer } from "./AttachmentSerializer";
 import { ChatSerializer } from "./ChatSerializer";
@@ -159,6 +159,7 @@ export class MessageSerializer {
             balloonBundleId: message.balloonBundleId,
             associatedMessageGuid: message.associatedMessageGuid,
             associatedMessageType: message.associatedMessageType,
+            ...(isMinSequoia ? { associatedMessageEmoji: message.associatedMessageEmoji ?? null } : {}),
             expressiveSendStyleId: message.expressiveSendStyleId,
             threadOriginatorGuid: message.threadOriginatorGuid,
             hasPayloadData: !!message.payloadData
